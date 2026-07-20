@@ -1,7 +1,9 @@
 //! Citoyen numérique : structure et générateur déterministe.
-//! Version avec dictionnaires statiques intégrés (200 prénoms, 200 noms, 50 villes).
+//! Version avec dictionnaires statiques intégrés (200 prénoms, 200 noms, 50 villes)
+//! et historique de vie (éducation, emploi, logement).
 
 use super::prng::SplitMix64;
+use super::life_history::{Education, Employment, Housing, DEGREES, UNIVERSITIES, EMPLOYERS};
 
 // ─── DICTIONNAIRES STATIQUES (intégrés au binaire) ───
 
@@ -92,6 +94,10 @@ pub struct Citizen {
     pub birth_timestamp: u64,
     pub city: [u8; 32],
     pub postal_code: u32,
+    // Historique de vie
+    pub education: Education,
+    pub employment: Employment,
+    pub housing: Housing,
 }
 
 impl Citizen {
@@ -115,6 +121,27 @@ impl Citizen {
             .trim_end_matches('\0')
     }
 
+    pub fn education_str(&self) -> (&str, &str, u16) {
+        (
+            core::str::from_utf8(&self.education.degree).unwrap_or("???").trim_end_matches('\0'),
+            core::str::from_utf8(&self.education.institution).unwrap_or("???").trim_end_matches('\0'),
+            self.education.graduation_year,
+        )
+    }
+
+    pub fn employment_str(&self) -> (&str, &str, u32, u16) {
+        (
+            core::str::from_utf8(&self.employment.employer).unwrap_or("???").trim_end_matches('\0'),
+            core::str::from_utf8(&self.employment.position).unwrap_or("???").trim_end_matches('\0'),
+            self.employment.annual_salary,
+            self.employment.start_year,
+        )
+    }
+
+    pub fn housing_str(&self) -> (u8, u16, u16) {
+        (self.housing.housing_type, self.housing.monthly_rent, self.housing.entry_year)
+    }
+
     // ─── GÉNÉRATEUR ───
 
     pub fn try_generate(seed: u64) -> Result<Self, &'static str> {
@@ -131,14 +158,64 @@ impl Citizen {
         // 3. Date de naissance (entre 1940 et 2010)
         let year = 1940 + (rng.next_u32() % 71);
         let month = 1 + (rng.next_u32() % 12);
-        let day = 1 + (rng.next_u32() % 28); // On évite les erreurs de jours
+        let day = 1 + (rng.next_u32() % 28);
         let birth_timestamp = (year * 365 + month * 30 + day) as u64 * 86400;
 
         // 4. Ville
         let idx = (rng.next_u32() as usize) % CITIES.len();
         let (city_name, postal_code) = CITIES[idx];
 
-        // Copie dans les tableaux fixes
+        // 5. Éducation
+        let graduation_year = (year + 18 + (rng.next_u32() % 8)) as u16;
+        let degree_idx = (rng.next_u32() as usize) % DEGREES.len();
+        let university_idx = (rng.next_u32() as usize) % UNIVERSITIES.len();
+        let mut degree_arr = [0u8; 64];
+        let mut uni_arr = [0u8; 64];
+        copy_str_to_array(&mut degree_arr, DEGREES[degree_idx])?;
+        copy_str_to_array(&mut uni_arr, UNIVERSITIES[university_idx])?;
+        let education = Education {
+            degree: degree_arr,
+            institution: uni_arr,
+            graduation_year,
+        };
+
+        // 6. Emploi
+        let start_year = graduation_year + (rng.next_u32() % 3) as u16;
+        let employer_idx = (rng.next_u32() as usize) % EMPLOYERS.len();
+        let (employer_str, (min_salary, max_salary)) = EMPLOYERS[employer_idx];
+        let salary = min_salary + (rng.next_u32() % (max_salary - min_salary));
+        let mut employer_arr = [0u8; 64];
+        let mut position_arr = [0u8; 64];
+        copy_str_to_array(&mut employer_arr, employer_str)?;
+        let positions = [
+            "Développeur", "Consultant", "Ingénieur", "Analyste",
+            "Chef de projet", "Architecte", "Responsable", "Directeur"
+        ];
+        let pos_idx = (rng.next_u32() as usize) % positions.len();
+        copy_str_to_array(&mut position_arr, positions[pos_idx])?;
+        let employment = Employment {
+            employer: employer_arr,
+            position: position_arr,
+            annual_salary: salary,
+            start_year,
+        };
+
+        // 7. Logement
+        let housing_type = (rng.next_u32() % 4) as u8;
+        let max_rent = (salary as f32 * 0.33 / 12.0) as u16;
+        let min_rent = 300;
+        let rent = if max_rent > min_rent {
+            min_rent + (rng.next_u32() % (max_rent as u32 - min_rent)) as u16
+        } else {
+            min_rent
+        };
+        let housing = Housing {
+            housing_type,
+            monthly_rent: rent,
+            entry_year: start_year,
+        };
+
+        // 8. Copie des chaînes dans les tableaux fixes
         let mut first_name_arr = [0u8; 32];
         let mut last_name_arr = [0u8; 32];
         let mut city_arr = [0u8; 32];
@@ -153,6 +230,9 @@ impl Citizen {
             birth_timestamp,
             city: city_arr,
             postal_code: *postal_code,
+            education,
+            employment,
+            housing,
         })
     }
 }
@@ -160,12 +240,12 @@ impl Citizen {
 // ─── UTILITAIRE ───
 
 /// Copie une chaîne dans un tableau de 32 octets (null-terminé).
-fn copy_str_to_array(dest: &mut [u8; 32], src: &str) -> Result<(), &'static str> {
+fn copy_str_to_array<const LEN: usize>(dest: &mut [u8; LEN], src: &str) -> Result<(), &'static str> {
     let bytes = src.as_bytes();
-    if bytes.len() >= 32 {
+    if bytes.len() >= LEN {
         return Err("Chaîne trop longue");
     }
     dest[..bytes.len()].copy_from_slice(bytes);
-    dest[bytes.len()] = 0; // null-terminated
+    dest[bytes.len()] = 0;
     Ok(())
-}
+    }
