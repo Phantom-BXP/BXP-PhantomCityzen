@@ -4,4 +4,4 @@
 extern crate alloc;
 
 pub mod core;
-pub mod generated;
+// pub mod generated; // Désactivé temporairement
