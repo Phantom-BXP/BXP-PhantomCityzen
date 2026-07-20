@@ -1,0 +1,16 @@
+[package]
+name = "bxp-phantom-citizen"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = ["minimal"]
+minimal = []
+full = []
+
+[profile.release]
+lto = true
+panic = "abort"
+opt-level = "z"
+strip = true
+codegen-units = 1
